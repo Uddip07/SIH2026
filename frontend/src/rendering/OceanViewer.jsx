@@ -105,7 +105,7 @@ export const OceanViewer = () => {
         u_renderMode: { value: renderMode === 'iso' ? 1 : 0 },
         u_colormap: { value: colormapCode[colormap] || 0 },
         u_stepSize: { value: 0.008 },
-        u_sliceZ: { value: sliceDepthMeters / 2000.0 },
+        u_sliceZ: { value: 0.0 },
         u_enableSlice: { value: enableSlice ? 1 : 0 },
       },
     });
@@ -125,7 +125,7 @@ export const OceanViewer = () => {
       side: THREE.DoubleSide,
     });
     const slicePlane = new THREE.Mesh(slicePlaneGeo, slicePlaneMat);
-    slicePlane.position.y = (0.3 - (sliceDepthMeters / 2000.0) * 0.6) * verticalExaggeration;
+    slicePlane.position.y = 0.3 * verticalExaggeration;
     slicePlane.visible = enableSlice;
     slicePlaneRef.current = slicePlane;
     scene.add(slicePlane);
@@ -215,19 +215,22 @@ export const OceanViewer = () => {
     if (!volumeMaterialRef.current) return;
     const colormapCode = { turbo: 0, viridis: 1, thermal: 2, jet: 3 };
 
+    const maxDepth = volumeMeta?.maxDepth || 1.0;
+    const sliceZRatio = Math.min(Math.max(0.0, sliceDepthMeters / maxDepth), 1.0);
+
     volumeMaterialRef.current.uniforms.u_opacity.value = opacity;
     volumeMaterialRef.current.uniforms.u_threshold.value = threshold;
     volumeMaterialRef.current.uniforms.u_isoValue.value = isoValue;
     volumeMaterialRef.current.uniforms.u_renderMode.value = renderMode === 'iso' ? 1 : 0;
     volumeMaterialRef.current.uniforms.u_colormap.value = colormapCode[colormap] || 0;
-    volumeMaterialRef.current.uniforms.u_sliceZ.value = sliceDepthMeters / 2000.0;
+    volumeMaterialRef.current.uniforms.u_sliceZ.value = sliceZRatio;
     volumeMaterialRef.current.uniforms.u_enableSlice.value = enableSlice ? 1 : 0;
 
     if (slicePlaneRef.current) {
       slicePlaneRef.current.visible = enableSlice;
-      slicePlaneRef.current.position.y = (0.3 - (sliceDepthMeters / 2000.0) * 0.6) * verticalExaggeration;
+      slicePlaneRef.current.position.y = (0.3 - sliceZRatio * 0.6) * verticalExaggeration;
     }
-  }, [opacity, threshold, isoValue, renderMode, colormap, sliceDepthMeters, enableSlice, verticalExaggeration]);
+  }, [opacity, threshold, isoValue, renderMode, colormap, sliceDepthMeters, enableSlice, verticalExaggeration, volumeMeta]);
 
   // Render Argo Float Markers
   useEffect(() => {
@@ -238,10 +241,8 @@ export const OceanViewer = () => {
       floatGroup.remove(floatGroup.children[0]);
     }
 
-    const minLon = volumeMeta?.minLon ?? 58.0;
-    const maxLon = volumeMeta?.maxLon ?? 96.0;
-    const minLat = volumeMeta?.minLat ?? 4.0;
-    const maxLat = volumeMeta?.maxLat ?? 26.0;
+    if (!volumeMeta || volumeMeta.minLon == null) return;
+    const { minLon, maxLon, minLat, maxLat } = volumeMeta;
 
     argoFloats.forEach((float) => {
       const lonSpan = maxLon > minLon ? (maxLon - minLon) : 1.0;

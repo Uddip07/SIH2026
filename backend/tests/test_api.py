@@ -40,7 +40,7 @@ def test_model_volume3d_binary():
     datasets = client.get("/api/v1/model/datasets").json()["datasets"]
     filename = datasets[0]
     meta = client.get(f"/api/v1/model/metadata?filename={filename}").json()
-    var_name = meta["variables"][0]
+    var_name = next((v for v in ["temp", "to", "so", "salinity"] if v in meta["variables"]), meta["variables"][0])
     response = client.get(f"/api/v1/model/volume3d?filename={filename}&variable={var_name}&dim_x=32&dim_y=32&dim_z=16")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/octet-stream"

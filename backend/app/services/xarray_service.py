@@ -137,27 +137,15 @@ class XarrayDataService:
                     hc = float(ds["hc"].values)
                     Vtransform = int(ds["Vtransform"].values)
 
-                    # Local bathymetry max depth across domain
-                    h_max = float(np.nanmax(ds["h"].values))
+                    h_vals = ds["h"].values
+                    valid_h = h_vals[~np.isnan(h_vals) & (h_vals > 0)]
+                    h_min = float(np.min(valid_h)) if len(valid_h) > 0 else 10.0
+                    h_max = float(np.max(valid_h)) if len(valid_h) > 0 else 2000.0
 
-                    # Check for local zeta at requested time
-                    zeta_val = 0.0
-                    zeta_key = next((k for k in ["zeta", "ssh", "zo"] if k in ds or k in da_3d.coords), None)
-                    if zeta_key:
-                        try:
-                            zeta_da = ds[zeta_key]
-                            z_tdim = next((k for k in ["time", "ocean_time", "time_counter"] if k in zeta_da.dims), None)
-                            if z_tdim and z_tdim in zeta_da.dims:
-                                z_t_idx = min(max(0, time_idx), zeta_da.sizes[z_tdim] - 1)
-                                zeta_da = zeta_da.isel({z_tdim: z_t_idx})
-                            zeta_val = float(np.nanmean(zeta_da.values))
-                        except Exception:
-                            zeta_val = 0.0
-
-                    z_bottom = calculate_roms_vertical_depths(s_rho[0], Cs_r[0], h_max, hc, zeta=zeta_val, Vtransform=Vtransform)
-                    z_surface = calculate_roms_vertical_depths(s_rho[-1], Cs_r[-1], h_max, hc, zeta=zeta_val, Vtransform=Vtransform)
-                    min_depth = abs(float(z_surface))
-                    max_depth = abs(float(z_bottom))
+                    z_surf = calculate_roms_vertical_depths(s_rho[-1], Cs_r[-1], h_min, hc, Vtransform=Vtransform)
+                    z_bot = calculate_roms_vertical_depths(s_rho[0], Cs_r[0], h_max, hc, Vtransform=Vtransform)
+                    min_depth = abs(float(np.nanmin(z_surf)))
+                    max_depth = abs(float(np.nanmax(z_bot)))
                 elif depth_key and depth_key in ds:
                     depth_vals = np.abs(ds[depth_key].values.flatten())
                     min_depth = float(np.nanmin(depth_vals))
@@ -165,38 +153,41 @@ class XarrayDataService:
 
                 # Reshape/Interpolate to target 3D texture shape (Z, Y, X)
                 nx_tgt, ny_tgt, nz_tgt = target_shape[0], target_shape[1], target_shape[2]
-                
-                shape = raw_data.shape
-                if len(shape) == 3:
-                    nz_curr, ny_curr, nx_curr = shape
-                    z_in = np.linspace(0, 1, nz_curr)
-                    y_in = np.linspace(0, 1, ny_curr)
-                    x_in = np.linspace(0, 1, nx_curr)
-                    
-                    valid_raw = raw_data[~np.isnan(raw_data)]
-                    if len(valid_raw) == 0:
-                        return None
-                    fill_val = float(np.mean(valid_raw))
 
-                    interp = RegularGridInterpolator(
-                        (z_in, y_in, x_in), raw_data, bounds_error=False, fill_value=fill_val
-                    )
-                    
-                    z_out = np.linspace(0, 1, nz_tgt)
-                    y_out = np.linspace(0, 1, ny_tgt)
-                    x_out = np.linspace(0, 1, nx_tgt)
-                    
-                    grid_z, grid_y, grid_x = np.meshgrid(z_out, y_out, x_out, indexing="ij")
-                    vol_interp = interp((grid_z, grid_y, grid_x)).astype(np.float32)
-                else:
-                    vol_interp = np.zeros((nz_tgt, ny_tgt, nx_tgt), dtype=np.float32)
+                shape = raw_data.shape
+                if len(shape) != 3:
+                    return None
+
+                nz_curr, ny_curr, nx_curr = shape
+                z_in = np.linspace(0, 1, nz_curr)
+                y_in = np.linspace(0, 1, ny_curr)
+                x_in = np.linspace(0, 1, nx_curr)
+
+                valid_raw = raw_data[~np.isnan(raw_data)]
+                if len(valid_raw) == 0:
+                    return None
+
+                # P3 ISSUE 4 FIX: Use fill_value=np.nan in RegularGridInterpolator (NEVER fill with mean value)
+                interp = RegularGridInterpolator(
+                    (z_in, y_in, x_in), raw_data, bounds_error=False, fill_value=np.nan
+                )
+
+                z_out = np.linspace(0, 1, nz_tgt)
+                y_out = np.linspace(0, 1, ny_tgt)
+                x_out = np.linspace(0, 1, nx_tgt)
+
+                grid_z, grid_y, grid_x = np.meshgrid(z_out, y_out, x_out, indexing="ij")
+                vol_interp = interp((grid_z, grid_y, grid_x)).astype(np.float32)
 
                 nan_mask = np.isnan(vol_interp)
                 has_nan = bool(np.any(nan_mask))
                 valid_mask = ~nan_mask
 
-                min_val = float(np.min(vol_interp[valid_mask])) if np.any(valid_mask) else 0.0
-                max_val = float(np.max(vol_interp[valid_mask])) if np.any(valid_mask) else 1.0
+                if not np.any(valid_mask):
+                    return None
+
+                min_val = float(np.min(vol_interp[valid_mask]))
+                max_val = float(np.max(vol_interp[valid_mask]))
 
                 if max_val == min_val:
                     max_val += 1e-5
